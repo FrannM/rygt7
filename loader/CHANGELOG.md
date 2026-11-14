@@ -15,6 +15,8 @@ CI fails when the two disagree.
   and copies each recorded program out of this PC's game files (adcpatch manifestprep). The game is then
   started with shader pre-translation on. No release ships a GT7 manifest yet, so nothing changes until
   one does.
+* FEAT-GTS-268 (from RyGTS FEAT-GTS-285): Graphics page. "Rebuild translated shaders in the background
+  after a renderer update" is on by default; unchecking it turns shader pre-translation off.
 
 ## 0.1.5 - 2026-11-14
 

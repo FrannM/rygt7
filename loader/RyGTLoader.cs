@@ -2380,7 +2380,8 @@ namespace RyGT
             // A tester's RX 6000 series card crashed loading into races with it on (2026-10-30).
             graphics.Controls.Add(Hint("Can crash RX 6000 series GPUs when loading into a race. If the game crashes when a race loads, turn this off."));
             // PERF-GT7-111/117: shader pre-translation (RYGT_MANIFEST_RECORD / RYGT_MANIFEST_PRETRANSLATE).
-            AddOption(graphics, "Rebuild translated shaders in the background after a renderer update (about 30 MB a track)", "GPU", "shader_pretranslate", false);
+            // FEAT-GTS-268 (from RyGTS FEAT-GTS-285): on unless unchecked.
+            AddOption(graphics, "Rebuild translated shaders in the background after a renderer update (about 30 MB a track)", "GPU", "shader_pretranslate", true);
             // PERF-GT7-108: the compile pack (RYGT_COMPILE_PACK).
             AddOption(graphics, "Compile the shaders already seen on this PC at start, after a driver update (background, pauses in races)", "GPU", "compile_pack", false);
             fpsLock.SelectedIndexChanged += delegate
@@ -4237,16 +4238,22 @@ namespace RyGT
                         // (shaders\<serial>.manifest) and its code (shaders\<serial>.capture, this PC's only);
                         // at start, the ones the shader store lacks (after a renderer update) are translated
                         // again in the background, so the races after an update start as warm ones.
-                        // Only when checked (like the compile pack below): a launcher script that
-                        // sets them itself keeps its setting.
+                        // The Advanced page's own values, applied last, still win.
                         // FEAT-GTS-267 (from RyGTS FEAT-GTS-284): and always once a shipped shader
                         // manifest is prepared (shaders\shader-manifest.txt): its records are
                         // translated at start (the ones the store has are skipped in a moment).
-                        if ((GpuSetting(root, "shader_pretranslate") is bool && (bool)GpuSetting(root, "shader_pretranslate")) ||
-                            File.Exists(ShaderManifestStampPath(root)))
+                        // FEAT-GTS-268 (from RyGTS FEAT-GTS-285): on by default (no setting yet counts
+                        // as checked), and unchecked sets RYGT_MANIFEST_PRETRANSLATE=0, so it turns
+                        // pre-translation off; a prepared shipped manifest still turns it on.
+                        object pretranslate = GpuSetting(root, "shader_pretranslate");
+                        if (!(pretranslate is bool && !(bool)pretranslate) || File.Exists(ShaderManifestStampPath(root)))
                         {
                             start.EnvironmentVariables["RYGT_MANIFEST_RECORD"] = "1";
                             start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "1";
+                        }
+                        else
+                        {
+                            start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "0";
                         }
                         // PERF-GT7-108 from the Graphics page: the pipelines this PC's driver cache lacks (after
                         // a driver update) are compiled at start from the recipes kept in the compile pack.
