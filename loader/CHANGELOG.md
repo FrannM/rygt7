@@ -6,6 +6,16 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.2.0 - 2026-11-14
+
+* FEAT-GTS-267 (from RyGTS FEAT-GTS-284): Shaders from a shipped shader manifest. When
+  tools\adcpatch\shader-manifest.bin is there (adcpatch manifestpack: the records of shader translations
+  and the pipeline recipes players have built, no shader code, and the index of where each program is in
+  the game's files), Set up, and a start after a newer one is shipped, writes it into the shaders folder
+  and copies each recorded program out of this PC's game files (adcpatch manifestprep). The game is then
+  started with shader pre-translation on. No release ships a GT7 manifest yet, so nothing changes until
+  one does.
+
 ## 0.1.5 - 2026-11-14
 
 * FEAT-GT7-181: Graphics page, Upscaling. With NVIDIA DLSS, a "Texture detail" list sets how much finer the

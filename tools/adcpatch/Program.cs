@@ -11,6 +11,8 @@ using System.Security.Cryptography;
 // Shader tooling (FEAT-GTS-266, Shaders.cs; GT7's volumes and GT Sport's):
 //   adcpatch shaderindex <game> <update or ""> <out.tsv[.br]>
 //   adcpatch shadercodes <game> <update or ""> <index.tsv[.br]> <manifest dir or hashes.txt> <out dir>
+//   adcpatch manifestpack [--serial <title id>] <out shader-manifest.bin> <source>...   (FEAT-GTS-267)
+//   adcpatch manifestprep <game> <update or ""> <shader-manifest.bin> <cache dir> [serial]
 using GTAdhocToolchain.CodeGen;
 using GTAdhocToolchain.Compiler;
 using GTAdhocToolchain.Core;
@@ -267,6 +269,162 @@ if (mode == "shadercodes")
         want = File.ReadAllLines(args[4]).Where(l => l.Trim().Length > 0).Select(l => Convert.ToUInt64(l.Trim(), 16)).ToHashSet();
     var (present, written, files, seconds) = GameShaders.ExtractPrograms(idx, GameShaders.ReadIndex(args[3]), want, args[5]);
     Console.WriteLine($"{want.Count} programs wanted, {present} extracted already; {written} of {want.Count - present} written from {files} files in {seconds:F0} s");
+    return 0;
+}
+
+if (mode == "manifestpack")
+{
+    // FEAT-GTS-267 (from RyGTS FEAT-GTS-284 and its "manifestpack merges sources"):
+    // manifestpack [--serial <title id>] <out shader-manifest.bin> <source>...: what a release
+    // ships for the shader pre-build: manifest records and pipeline recipes (no code: a record
+    // holds a translation's inputs and reads, a recipe a pipeline's state) and the index of where
+    // each program is in the game's files. Sources, in order: a shader-manifest.bin (its records,
+    // recipes and index), a manifest folder (<serial>.manifest: its .rec files and those of its
+    // per-GPU folders, where GT7's renderer keeps them, and its pipelines-*.rcp files; not the
+    // capture) or an index (.tsv or .tsv.br). Records add up (a record is named by its program
+    // and SPIR-V hash, so one already there is the same); a later recipe file of the same GPU
+    // replaces an earlier one; a later index replaces an earlier one. So a shipped file grows
+    // with: manifestpack shader-manifest.bin shader-manifest.bin <newer manifest folder>.
+    // A recipe file is renamed pipelines-shared-..., so a player with the recording GPU imports it
+    // too (the renderer skips its own GPU's file).
+    // The game's serial (GT7: CUSA24769) comes from --serial, a <serial>.manifest folder's name or
+    // a shader-manifest.bin's entries; sources of two games are refused.
+    // File: "RYGTMAN1", then Brotli: int count, (string name, int length, bytes) per entry; names
+    // are "<serial>.manifest/<file>" and "index.tsv".
+    var rest = args.Skip(1).ToList();
+    string serial = null;
+    Action<string, string> useSerial = (found, source) =>
+    {
+        if (string.IsNullOrEmpty(found)) return;
+        if (serial != null && !serial.Equals(found, StringComparison.OrdinalIgnoreCase))
+            throw new Exception($"{source} is {found}'s, the others {serial}'s");
+        serial ??= found;
+    };
+    if (rest.Count > 1 && rest[0] == "--serial") { useSerial(rest[1], "--serial"); rest.RemoveRange(0, 2); }
+    if (rest.Count < 2) throw new Exception("manifestpack [--serial <title id>] <out shader-manifest.bin> <source>...");
+    string outPath = rest[0];
+    var records = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+    var recipes = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+    byte[] indexBytes = null;
+    var gpuFolder = new System.Text.RegularExpressions.Regex("^[0-9a-fA-F]{4}-[0-9a-fA-F]{4}$");
+    foreach (var source in rest.Skip(1))
+    {
+        int before = records.Count, recipesBefore = recipes.Count;
+        bool index = false;
+        if (Directory.Exists(source))
+        {
+            string folder = Path.GetFileName(Path.GetFullPath(source).TrimEnd('\\', '/'));
+            if (folder.EndsWith(".manifest", StringComparison.OrdinalIgnoreCase)) useSerial(folder[..^".manifest".Length], source);
+            var recordDirs = new List<string> { source };
+            recordDirs.AddRange(Directory.EnumerateDirectories(source).Where(d => gpuFolder.IsMatch(Path.GetFileName(d))).OrderBy(d => d, StringComparer.Ordinal));
+            foreach (var dir in recordDirs)
+                foreach (var file in Directory.EnumerateFiles(dir, "*.rec"))
+                    records.TryAdd(Path.GetFileName(file), File.ReadAllBytes(file));
+            foreach (var file in Directory.EnumerateFiles(source, "pipelines-*.rcp"))
+            {
+                string name = Path.GetFileName(file);
+                recipes[name.StartsWith("pipelines-shared-") ? name : "pipelines-shared-" + name["pipelines-".Length..]] = File.ReadAllBytes(file);
+            }
+        }
+        else if (source.EndsWith(".bin", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var (name, bytes) in GameShaders.ReadManifestBundle(source))
+            {
+                if (name == "index.tsv") { indexBytes = bytes; index = true; continue; }
+                useSerial(GameShaders.ManifestSerial(name), source);
+                string file = Path.GetFileName(name);
+                if (file.EndsWith(".rec")) records.TryAdd(file, bytes);
+                else if (file.EndsWith(".rcp")) recipes[file] = bytes;
+            }
+        }
+        else
+        {
+            indexBytes = System.Text.Encoding.UTF8.GetBytes(string.Join("\n", GameShaders.ReadIndex(source)) + "\n");
+            index = true;
+        }
+        Console.WriteLine($"{source}: {records.Count - before} new records, {recipes.Count - recipesBefore} new recipe files{(index ? ", the index" : "")}");
+    }
+    if (indexBytes == null) throw new Exception("no index: give a shader-manifest.bin or an index.tsv(.br) as a source");
+    if (serial == null) throw new Exception("which game: give --serial <title id> or a <serial>.manifest folder");
+    string temp = outPath + ".tmp";
+    using (var output = File.Create(temp))
+    {
+        output.Write("RYGTMAN1"u8);
+        using var brotli = new System.IO.Compression.BrotliStream(output, System.IO.Compression.CompressionLevel.SmallestSize);
+        using var w = new BinaryWriter(brotli);
+        w.Write(records.Count + recipes.Count + 1);
+        foreach (var (name, bytes) in records.Concat(recipes))
+        {
+            w.Write(serial + ".manifest/" + name);
+            w.Write(bytes.Length);
+            w.Write(bytes);
+        }
+        w.Write("index.tsv");
+        w.Write(indexBytes.Length);
+        w.Write(indexBytes);
+    }
+    File.Move(temp, outPath, true);
+    Console.WriteLine($"{serial}: {records.Count} records, {recipes.Count} recipe files ({string.Join(", ", recipes.Keys)}) and the index: {new FileInfo(outPath).Length / 1024} KB");
+    return 0;
+}
+
+if (mode == "manifestprep")
+{
+    // FEAT-GTS-267 (from RyGTS FEAT-GTS-284): manifestprep <game> <update or "">
+    // <shader-manifest.bin> <cache dir> [serial]: what the launcher's Set up does with the shipped
+    // manifest (manifestpack). Writes its records and recipes into <cache dir>\<serial>.manifest
+    // (records already there are kept; the shipped recipe files are replaced) and copies each
+    // recorded program out of the player's own game files into <cache dir>\<serial>-programs
+    // (programs already there are kept). The serial is the manifest's; given, a manifest made for
+    // another game is refused (exit 2) and nothing is written.
+    string game = args[1], update = args[2], cache = args[4];
+    string wantedSerial = args.Length > 5 && args[5].Length > 0 ? args[5] : null;
+    var bundle = GameShaders.ReadManifestBundle(args[3]).ToList();
+    var serials = bundle.Select(e => GameShaders.ManifestSerial(e.name)).Where(s => s != null)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    string serial = wantedSerial ?? serials.FirstOrDefault();
+    if (serial == null || (serials.Count > 0 && !serials.Contains(serial, StringComparer.OrdinalIgnoreCase)))
+    {
+        Console.WriteLine($"{args[3]} is a shader manifest for {(serials.Count > 0 ? string.Join(", ", serials) : "no game")}, not {serial ?? "this game"}: nothing prepared");
+        return 2;
+    }
+    string manifest = Path.Combine(cache, serial + ".manifest");
+    Directory.CreateDirectory(manifest);
+    var records = new List<string>();
+    string[] index = Array.Empty<string>();
+    int written = 0, recipes = 0;
+    string prefix = serial + ".manifest/";
+    foreach (var (name, bytes) in bundle)
+    {
+        if (name == "index.tsv")
+        {
+            index = System.Text.Encoding.UTF8.GetString(bytes).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            continue;
+        }
+        if (!name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+        string file = Path.GetFileName(name);
+        string target = Path.Combine(manifest, file);
+        if (file.EndsWith(".rec"))
+        {
+            records.Add(file);
+            if (File.Exists(target)) continue;
+            File.WriteAllBytes(target + ".tmp", bytes);
+            File.Move(target + ".tmp", target, true);
+            written++;
+        }
+        else if (file.EndsWith(".rcp"))
+        {
+            File.WriteAllBytes(target + ".tmp", bytes);
+            File.Move(target + ".tmp", target, true);
+            recipes++;
+        }
+    }
+    var idx = GameShaders.IndexFiles(game, update);
+    var want = GameShaders.RecordPrograms(records);
+    var (present, copied, files, seconds) = GameShaders.ExtractPrograms(idx, index, want, Path.Combine(cache, serial + "-programs"));
+    Console.WriteLine($"{serial}: {written} of {records.Count} records and {recipes} recipe files written; " +
+                      $"{copied} programs copied from the game files ({present} of {want.Count} there already, " +
+                      $"{want.Count - present - copied} not found) in {seconds:F0} s");
     return 0;
 }
 

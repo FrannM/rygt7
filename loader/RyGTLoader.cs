@@ -3602,6 +3602,13 @@ namespace RyGT
             // GT7's runtime settings and directories; no GT Sport scripts or shader packs.
             ConfigureGT7();
             UsePortableShaderCache();
+            // FEAT-GTS-267: the shipped shader manifest, when a release has one.
+            if (File.Exists(ShaderManifest))
+            {
+                SetStatus("Preparing shaders from your game files (a few minutes)...");
+                if (!PrepareShaderManifest(baseDir, updateDir))
+                    Log("Note: the shaders could not be prepared; they will be translated while you play.");
+            }
             // Which Offline mode patch file GT7.exe was built with, so that Play notices a file added,
             // changed or removed later (adding it alone changes nothing until GT7.exe is rebuilt).
             File.WriteAllText(OfflineStampPath, OfflinePatchState());
@@ -3966,6 +3973,72 @@ namespace RyGT
 
         string ShaderFolder { get { return Path.Combine(root, "shaders"); } }
 
+        // FEAT-GTS-267 (from RyGTS FEAT-GTS-284): tools\adcpatch\shader-manifest.bin (adcpatch
+        // manifestpack, for CUSA24769): the shader manifest players have built (records of shader
+        // translations and pipeline recipes, no shader code) and the index of where each program
+        // is in the game's files. manifestprep writes them into shaders\<serial>.manifest and
+        // copies each recorded program out of this PC's game files into shaders\<serial>-programs;
+        // records and programs already there are kept, so a newer manifest only adds its new ones.
+        // No release ships the file yet (GT Sport's does not fit GT7), so none of this runs then.
+        string ShaderManifest { get { return Path.Combine(root, "tools", "adcpatch", "shader-manifest.bin"); } }
+        string ShaderManifestStamp { get { return ShaderManifestStampPath(root); } }
+        static string ShaderManifestStampPath(string root) { return Path.Combine(root, "shaders", "shader-manifest.txt"); }
+
+        static string FileSha256(string path)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var input = File.OpenRead(path))
+                return BitConverter.ToString(sha.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
+        }
+
+        /// A shipped shader manifest that was not prepared, or not this one.
+        bool ShaderManifestOutdated()
+        {
+            if (!File.Exists(ShaderManifest)) return false;
+            try { return !File.Exists(ShaderManifestStamp) || File.ReadAllText(ShaderManifestStamp).Trim() != FileSha256(ShaderManifest); }
+            catch { return true; }
+        }
+
+        bool PrepareShaderManifest(string baseDir, string updateDir)
+        {
+            string tool = Path.Combine(root, "tools", "adcpatch", "adcpatch.exe");
+            if (!File.Exists(tool) || !File.Exists(ShaderManifest)) return false;
+            string cache = ShaderFolder;
+            Directory.CreateDirectory(cache);
+            Func<string, string> arg = d => "\"" + (d ?? "").TrimEnd('\\') + "\"";
+            string arguments = "manifestprep " + arg(baseDir) + " " + arg(updateDir) + " " + arg(ShaderManifest) + " " +
+                               arg(cache) + " " + GameLayout.TitleId;
+            Log("> adcpatch.exe " + arguments);
+            var info = new ProcessStartInfo(tool, arguments)
+            {
+                WorkingDirectory = Path.GetDirectoryName(tool), UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            };
+            var lines = new List<string>();
+            using (var process = new Process { StartInfo = info })
+            {
+                DataReceivedEventHandler collect = delegate (object sender, DataReceivedEventArgs e)
+                {
+                    if (e.Data == null) return;
+                    lock (lines) lines.Add(e.Data);
+                    if (e.Data.Contains(" programs copied") || e.Data.Contains("nothing prepared")) Log(e.Data);
+                };
+                process.OutputDataReceived += collect;
+                process.ErrorDataReceived += collect;
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+                process.WaitForExit();
+                lock (lines)
+                {
+                    try { File.WriteAllLines(Path.Combine(Path.GetDirectoryName(tool), "manifestprep.log"), lines); } catch { }
+                }
+                if (process.ExitCode != 0) return false;
+                try { File.WriteAllText(ShaderManifestStamp, FileSha256(ShaderManifest)); } catch { }
+                return true;
+            }
+        }
+
         bool OldShaderCacheExists()
         {
             return Directory.Exists(Path.Combine(root, "user", "cache"));
@@ -4084,6 +4157,17 @@ namespace RyGT
                     if (OldShaderCacheExists()) SetStatus("Moving your shaders to the shaders folder (once)...");
                     UsePortableShaderCache();
                     ConfigureGT7();
+                    // FEAT-GTS-267: a newer shipped shader manifest: its new records and programs.
+                    if (ShaderManifestOutdated() && Directory.Exists(settings.Game))
+                    {
+                        SetStatus("Preparing shaders from your game files (a few minutes the first time)...");
+                        try
+                        {
+                            if (!PrepareShaderManifest(settings.Game, settings.Update))
+                                Log("Note: the shaders could not be prepared; they will be translated while you play.");
+                        }
+                        catch (Exception e) { Log("Shaders: " + e.Message); }
+                    }
                     settings.Save();
                     prepared = true;
                 }
@@ -4155,7 +4239,11 @@ namespace RyGT
                         // again in the background, so the races after an update start as warm ones.
                         // Only when checked (like the compile pack below): a launcher script that
                         // sets them itself keeps its setting.
-                        if (GpuSetting(root, "shader_pretranslate") is bool && (bool)GpuSetting(root, "shader_pretranslate"))
+                        // FEAT-GTS-267 (from RyGTS FEAT-GTS-284): and always once a shipped shader
+                        // manifest is prepared (shaders\shader-manifest.txt): its records are
+                        // translated at start (the ones the store has are skipped in a moment).
+                        if ((GpuSetting(root, "shader_pretranslate") is bool && (bool)GpuSetting(root, "shader_pretranslate")) ||
+                            File.Exists(ShaderManifestStampPath(root)))
                         {
                             start.EnvironmentVariables["RYGT_MANIFEST_RECORD"] = "1";
                             start.EnvironmentVariables["RYGT_MANIFEST_PRETRANSLATE"] = "1";

@@ -175,6 +175,34 @@ static class GameShaders
     static List<string> VolumeDirs(IEnumerable<string> indexFiles) =>
         indexFiles.Select(Path.GetDirectoryName).Where(d => !string.IsNullOrEmpty(d)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
+    /// FEAT-GTS-267 (from RyGTS FEAT-GTS-284): a shipped shader manifest's records and recipes are
+    /// named "<serial>.manifest/<file>"; the serial an entry was made for, or null.
+    public static string ManifestSerial(string entry)
+    {
+        int slash = entry.IndexOf('/');
+        return slash > 0 && entry[..slash].EndsWith(".manifest", StringComparison.OrdinalIgnoreCase)
+            ? entry[..(slash - ".manifest".Length)]
+            : null;
+    }
+
+    /// FEAT-GTS-267 (from RyGTS FEAT-GTS-284): the entries of a shader-manifest.bin (adcpatch
+    /// manifestpack): "RYGTMAN1", then Brotli: int count, (string name, int length, bytes) each.
+    public static IEnumerable<(string name, byte[] bytes)> ReadManifestBundle(string path)
+    {
+        using var input = File.OpenRead(path);
+        var magic = new byte[8];
+        input.ReadExactly(magic);
+        if (!magic.AsSpan().SequenceEqual("RYGTMAN1"u8)) throw new Exception(path + ": not a RyGT shader manifest");
+        using var br = new System.IO.Compression.BrotliStream(input, System.IO.Compression.CompressionMode.Decompress);
+        using var r = new BinaryReader(br);
+        int count = r.ReadInt32();
+        for (int i = 0; i < count; i++)
+        {
+            string name = r.ReadString();
+            yield return (name, r.ReadBytes(r.ReadInt32()));
+        }
+    }
+
     /// FEAT-GTS-266 (from RyGTS FIX-GTS-282): the programs of manifest records, from their file
     /// names (<program>-<SPIR-V hash>.rec).
     public static HashSet<ulong> RecordPrograms(IEnumerable<string> recordFiles)

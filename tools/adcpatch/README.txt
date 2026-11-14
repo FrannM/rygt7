@@ -28,6 +28,16 @@ Sport's (<folder>\gt.idx), the update's first.
       Copies the wanted programs (a manifest folder's <program>-<SPIR-V hash>.rec names, or a list
       of hashes) out of the player's own game files as <hash>.bin; programs already there are kept.
       ADCPATCH_THREADS sets the unpack threads (6).
+  manifestpack [--serial <title id>] <out shader-manifest.bin> <source>...   (FEAT-GTS-267)
+      A shader manifest to ship: the records (.rec, also from per-GPU folders) and pipeline recipes
+      (pipelines-*.rcp, renamed pipelines-shared-*) of <serial>.manifest folders, earlier
+      shader-manifest.bin files and an index (.tsv or .tsv.br); no shader code. The serial comes
+      from --serial, a <serial>.manifest folder's name or a .bin's entries.
+  manifestprep <game> <update or ""> <shader-manifest.bin> <cache dir> [serial]
+      What the launcher runs when tools\adcpatch\shader-manifest.bin is there: writes its records
+      and recipes into <cache dir>\<serial>.manifest and copies each recorded program out of the
+      player's game files into <cache dir>\<serial>-programs. Refuses (exit 2) a manifest made for
+      another serial.
 
 Build: clone https://github.com/Nenkai/GTAdhocToolchain (3fecc2e) next to this folder as
 ..\GTAdhocToolchain, apply GTAdhocToolchain-exact-roundtrip.patch (symbol ids by name, so an
