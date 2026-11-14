@@ -8,6 +8,9 @@ using System.Security.Cryptography;
 //   adcpatch grim      <GRIM.ADC> <out.adc> <grim.ad>
 // The output is never larger than the input (the game reads scripts by their original size);
 // it is padded with zeros up to the original size.
+// Shader tooling (FEAT-GTS-266, Shaders.cs; GT7's volumes and GT Sport's):
+//   adcpatch shaderindex <game> <update or ""> <out.tsv[.br]>
+//   adcpatch shadercodes <game> <update or ""> <index.tsv[.br]> <manifest dir or hashes.txt> <out dir>
 using GTAdhocToolchain.CodeGen;
 using GTAdhocToolchain.Compiler;
 using GTAdhocToolchain.Core;
@@ -193,6 +196,80 @@ static void PruneSymbols(AdhocFile file, AdhocSymbolMap map)
 }
 
 string mode = args[0];
+if (mode == "shaderindex")
+{
+    // FEAT-GTS-266 (from RyGTS, with its FIX-GTS-281 and FIX-GTS-283): shaderindex <game> <update
+    // or ""> <out.tsv or out.tsv.br>: hash, volume file, footer offset, code length of every
+    // shader program in the game's files (contents\gt.idx for GT7; a GT7 file is named by its
+    // hash, "#xxxxxxxx"). Each program is written as it is found (<out>.partial, replaced at the
+    // end), so a stop or a crash keeps what was found. The smallest file holding each program is
+    // kept, so extraction (shadercodes) unpacks small files rather than a track's pack where the
+    // same program is in a car's file too. A name ending in .br is written Brotli-compressed.
+    var idx = GameShaders.IndexFiles(args[1], args[2]);
+    var found = new Dictionary<ulong, string>();
+    var foundSize = new Dictionary<ulong, long>();
+    var byExtension = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    int files = 0;
+    var started = DateTime.UtcNow;
+    string partial = args[3] + ".partial";
+    int failed;
+    using (var writer = new StreamWriter(partial, false))
+    {
+        failed = GameShaders.ForEachFile(idx, Path.Combine(Path.GetTempPath(), "rygt-shaderscan-" + Environment.ProcessId), (path, data) =>
+        {
+            if (++files % 2000 == 0)
+            {
+                writer.Flush();
+                Console.WriteLine($"{files} files, {found.Count} programs, {(DateTime.UtcNow - started).TotalMinutes:F1} min");
+            }
+            bool any = false;
+            foreach (var (hash, footer, length) in GameShaders.Find(data))
+            {
+                string line = $"{hash:x16}\t{path}\t{footer}\t{length}";
+                if (found.ContainsKey(hash))
+                {
+                    if (data.Length < foundSize[hash]) { found[hash] = line; foundSize[hash] = data.Length; }
+                    continue;
+                }
+                found[hash] = line;
+                foundSize[hash] = data.Length;
+                writer.WriteLine(line);
+                any = true;
+            }
+            if (any)
+            {
+                string ext = Path.GetExtension(path);
+                byExtension[ext] = byExtension.GetValueOrDefault(ext) + 1;
+            }
+        });
+    }
+    GameShaders.WriteIndex(args[3], found.Values);
+    File.Delete(partial);
+    Console.WriteLine($"{found.Count} programs in {files} files ({failed} skipped) in {(DateTime.UtcNow - started).TotalMinutes:F1} min");
+    Console.WriteLine("files with new programs by type: " +
+        string.Join(", ", byExtension.OrderByDescending(e => e.Value).Select(e => $"{(e.Key.Length > 0 ? e.Key : "(none)")} {e.Value}")));
+    return 0;
+}
+
+if (mode == "shadercodes")
+{
+    // FEAT-GTS-266 (from RyGTS, with its FIX-GTS-281 and FIX-GTS-282): shadercodes <game> <update
+    // or ""> <index.tsv[.br]> <manifest dir or hashes.txt> <out dir>: writes <hash>.bin for each
+    // wanted program, from its first instruction through its footer, from the player's own game
+    // files (nothing leaves the PC). The wanted programs are a manifest folder's (a record file is
+    // <program>-<SPIR-V hash>.rec, in it or its per-GPU folders) or a list of hashes; programs
+    // already in <out dir> are kept, so after a manifest update only the new ones are unpacked.
+    var idx = GameShaders.IndexFiles(args[1], args[2]);
+    HashSet<ulong> want;
+    if (Directory.Exists(args[4]))
+        want = GameShaders.RecordPrograms(Directory.EnumerateFiles(args[4], "*.rec", SearchOption.AllDirectories));
+    else
+        want = File.ReadAllLines(args[4]).Where(l => l.Trim().Length > 0).Select(l => Convert.ToUInt64(l.Trim(), 16)).ToHashSet();
+    var (present, written, files, seconds) = GameShaders.ExtractPrograms(idx, GameShaders.ReadIndex(args[3]), want, args[5]);
+    Console.WriteLine($"{want.Count} programs wanted, {present} extracted already; {written} of {want.Count - present} written from {files} files in {seconds:F0} s");
+    return 0;
+}
+
 if (mode == "extract")
 {
     // extract <game folder> <update folder or ""> <out dir> <path>...: research helper.

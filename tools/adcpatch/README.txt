@@ -17,6 +17,18 @@ built from Polyphony's scripts. Inputs come from the game's volume (GTToolsSharp
   gallery    PROJECTS\GT7SP\GALLERY\GALLERY.ADC                  "My Decals" listed offline
   grim       SCRIPTS\GT7SP\GRIM\GRIM.ADC           grim.ad       decal list from <game>\decals\*.svg
 
+Shader tooling (FEAT-GTS-266, Shaders.cs, from RyGTS): reads GT7's volumes (<folder>\contents\gt.idx,
+GTToolsSharp's MPH volume, whose files are known only by their name's hash: "#xxxxxxxx") and GT
+Sport's (<folder>\gt.idx), the update's first.
+
+  shaderindex <game> <update or ""> <out.tsv or out.tsv.br>
+      Every shader program in the game's files: hash, file, footer offset, code length. Written as
+      found (<out>.partial), so a stopped scan keeps its findings; .br is Brotli-compressed.
+  shadercodes <game> <update or ""> <index> <manifest folder or hashes.txt> <out dir>
+      Copies the wanted programs (a manifest folder's <program>-<SPIR-V hash>.rec names, or a list
+      of hashes) out of the player's own game files as <hash>.bin; programs already there are kept.
+      ADCPATCH_THREADS sets the unpack threads (6).
+
 Build: clone https://github.com/Nenkai/GTAdhocToolchain (3fecc2e) next to this folder as
 ..\GTAdhocToolchain, apply GTAdhocToolchain-exact-roundtrip.patch (symbol ids by name, so an
 unchanged script round-trips byte for byte), clone https://github.com/Nenkai/GTToolsSharp (a59e6f1, with submodules) as ..\GTToolsSharp and
