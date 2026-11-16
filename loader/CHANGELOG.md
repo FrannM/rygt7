@@ -6,6 +6,12 @@ The version lives in `loader/Version.cs`. To release a change, bump
 `LauncherVersion.Value` there and add a section here with the same number;
 CI fails when the two disagree.
 
+## 0.1.7 - 2026-11-16
+
+* FIX-GTS-271: GT7's online-service keys are no longer in ryGT7. RyGTServer reads them from your own
+  GT7 eboot.bin, which the Online page passes when it starts hosting; without it, GT7's online
+  service stays off.
+
 ## 0.1.6 - 2026-11-15
 
 * FEAT-GTS-269: Settings > About carries NVIDIA's DLSS attribution, as the NVIDIA RTX SDKs License
