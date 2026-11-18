@@ -110,6 +110,8 @@ struct WheelSettings {
     // the title only turns on its wheel mode (and force feedback) for such a pad. Off by
     // default: in that mode the paddles do not shift yet.
     bool padIsWheel = false;
+    // Percent of pedal travel ignored at the released end (0-20), so a noisy pedal rests at 0.
+    int pedalDeadzone = 2;
 };
 const WheelSettings& Wheel();
 
